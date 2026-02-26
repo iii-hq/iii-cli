@@ -1,0 +1,285 @@
+name: Validate Release
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+jobs:
+  validate:
+    name: Validate Release Artifacts
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      validation_passed: ${{ steps.validate.outputs.passed }}
+      release_tag: ${{ steps.tag.outputs.tag }}
+      has_slack_ts: ${{ steps.slack_ts.outputs.has_slack_ts }}
+      slack_ts: ${{ steps.slack_ts.outputs.slack_ts }}
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+
+      - name: Download Slack notification data
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "Fetching artifacts from workflow run $WORKFLOW_RUN_ID..."
+          ARTIFACTS=$(gh api repos/$GH_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts --jq '.artifacts[] | select(.name == "slack-notification-data") | .archive_download_url' 2>/dev/null || echo "")
+
+          if [[ -n "$ARTIFACTS" ]]; then
+            echo "Found slack-notification-data artifact, downloading..."
+            mkdir -p slack-data
+            gh api "$ARTIFACTS" > slack-data/artifact.zip
+            unzip -q slack-data/artifact.zip -d slack-data/
+            echo "::notice::Slack notification data downloaded successfully"
+          else
+            echo "::notice::No slack-notification-data artifact found"
+          fi
+
+      - name: Get Slack message timestamp
+        id: slack_ts
+        run: |
+          if [[ -f slack-data/message_ts.txt ]]; then
+            SLACK_TS=$(cat slack-data/message_ts.txt)
+            echo "slack_ts=$SLACK_TS" >> "$GITHUB_OUTPUT"
+            echo "has_slack_ts=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Found Slack message timestamp: $SLACK_TS"
+          else
+            echo "has_slack_ts=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Slack message timestamp found"
+          fi
+
+      - name: Get release tag
+        id: tag
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [[ ! "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Could not determine release tag from workflow run (got: $HEAD_BRANCH)"
+            exit 1
+          fi
+          echo "tag=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "::notice::Validating release: $HEAD_BRANCH"
+
+      - name: Validate binary artifacts
+        id: validate
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          BINARIES=("iii-cli")
+          TARGETS=(
+            "x86_64-apple-darwin"
+            "aarch64-apple-darwin"
+            "x86_64-pc-windows-msvc"
+            "aarch64-pc-windows-msvc"
+            "x86_64-unknown-linux-gnu"
+            "x86_64-unknown-linux-musl"
+            "aarch64-unknown-linux-gnu"
+          )
+
+          PASSED=true
+          MISSING=()
+
+          echo "Validating release artifacts for $RELEASE_TAG..."
+
+          ASSETS=$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+
+          if [[ -z "$ASSETS" ]]; then
+            echo "::error::No assets found for release $RELEASE_TAG"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found assets:"
+          echo "$ASSETS"
+          echo "---"
+
+          for BIN in "${BINARIES[@]}"; do
+            for TARGET in "${TARGETS[@]}"; do
+              BINARY_FOUND=false
+              CHECKSUM_FOUND=false
+
+              if echo "$ASSETS" | grep -q "${BIN}-${TARGET}"; then
+                BINARY_FOUND=true
+              fi
+
+              if echo "$ASSETS" | grep -q "${BIN}-${TARGET}.*\.sha256"; then
+                CHECKSUM_FOUND=true
+              fi
+
+              if [[ "$BINARY_FOUND" == "true" && "$CHECKSUM_FOUND" == "true" ]]; then
+                echo "::notice::${BIN} ${TARGET}: binary and checksum present"
+              else
+                PASSED=false
+                if [[ "$BINARY_FOUND" == "false" ]]; then
+                  echo "::error::${BIN} ${TARGET}: binary MISSING"
+                  MISSING+=("${BIN}-${TARGET} (binary)")
+                fi
+                if [[ "$CHECKSUM_FOUND" == "false" ]]; then
+                  echo "::error::${BIN} ${TARGET}: checksum MISSING"
+                  MISSING+=("${BIN}-${TARGET} (checksum)")
+                fi
+              fi
+            done
+          done
+
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+
+          if [[ "$PASSED" == "false" ]]; then
+            echo "::error::Missing artifacts: ${MISSING[*]}"
+          else
+            echo "::notice::All ${#BINARIES[@]} binaries x ${#TARGETS[@]} platform targets validated"
+          fi
+
+  notify:
+    name: Notify Validation Result
+    needs: validate
+    if: always() && needs.validate.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Update Slack - Validation Success
+        if: needs.validate.outputs.has_slack_ts == 'true' && needs.validate.outputs.validation_passed == 'true'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ needs.validate.outputs.slack_ts }}
+            text: ":white_check_mark: iii-cli ${{ needs.validate.outputs.release_tag }} released"
+            blocks: |
+              [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ":white_check_mark: iii-cli ${{ needs.validate.outputs.release_tag }} released"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":white_check_mark: Tag created\n:white_check_mark: Binaries built (iii-cli)\n:white_check_mark: Release published\n:white_check_mark: *Validation passed*"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Download Release"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.validate.outputs.release_tag }}"
+                    }
+                  ]
+                }
+              ]
+
+      - name: Post Slack - Validation Success (fallback)
+        if: needs.validate.outputs.has_slack_ts != 'true' && needs.validate.outputs.validation_passed == 'true'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: ":white_check_mark: *iii-cli Release Validation Passed*\nVersion: `${{ needs.validate.outputs.release_tag }}`\nBinary: iii-cli\nRelease workflow: <${{ github.event.workflow_run.html_url }}|View release run>\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View validation>"
+
+      - name: Update Slack - Validation Failed
+        if: needs.validate.outputs.has_slack_ts == 'true' && needs.validate.outputs.validation_passed != 'true'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ needs.validate.outputs.slack_ts }}
+            text: ":warning: iii-cli ${{ needs.validate.outputs.release_tag }} validation failed"
+            blocks: |
+              [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ":warning: iii-cli ${{ needs.validate.outputs.release_tag }} validation failed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":white_check_mark: Tag created\n:white_check_mark: Binaries built\n:white_check_mark: Release published\n:x: *Validation failed*\n\nAutomatic rollback in progress..."
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Validation"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+
+      - name: Post Slack - Validation Failed (fallback)
+        if: needs.validate.outputs.has_slack_ts != 'true' && needs.validate.outputs.validation_passed != 'true'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: ":warning: *iii-cli Release Validation Failed*\nVersion: `${{ needs.validate.outputs.release_tag }}`\nRelease workflow: <${{ github.event.workflow_run.html_url }}|View release run>\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View validation>"
+
+  trigger-rollback:
+    name: Trigger Rollback
+    needs: validate
+    if: needs.validate.outputs.validation_passed == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+
+      - name: Trigger rollback workflow
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "::warning::Validation failed - triggering rollback for $RELEASE_TAG"
+          gh workflow run rollback.yml \
+            --repo "$GH_REPO" \
+            -f version="$RELEASE_TAG" \
+            -f delete_release=true \
+            -f reason="Automated rollback: release validation failed"

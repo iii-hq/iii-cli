@@ -1,0 +1,301 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+env:
+  CARGO_TERM_COLOR: always
+  TOTAL_TARGETS: 7
+  BINARIES: "iii-cli"
+
+jobs:
+  notify-start:
+    name: Notify Release Start
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      slack_ts: ${{ steps.slack.outputs.ts }}
+
+    steps:
+      - name: Send Slack notification
+        id: slack
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: "Release ${{ github.ref_name }} started"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "*iii-cli Release ${{ github.ref_name }}*\n\n:hourglass_flowing_sand: Creating release...\n:white_square: Building binaries (0/${{ env.TOTAL_TARGETS }} targets x 1 binary)\n:white_square: Validating release..."
+              - type: "context"
+                elements:
+                  - type: "mrkdwn"
+                    text: "Triggered by ${{ github.actor }} | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>"
+
+      - name: Save Slack timestamp to artifact
+        env:
+          SLACK_TS: ${{ steps.slack.outputs.ts }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          mkdir -p slack-data
+          echo "$SLACK_TS" > slack-data/message_ts.txt
+          echo "$REF_NAME" > slack-data/version.txt
+
+      - name: Upload Slack data
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: slack-notification-data
+          path: slack-data/
+          retention-days: 3
+
+  detect-prerelease:
+    name: Detect Pre-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      is_prerelease: ${{ steps.check.outputs.is_prerelease }}
+    steps:
+      - name: Check for pre-release tag
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  create-release:
+    name: Create Release
+    needs: [notify-start, detect-prerelease]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Create Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          draft: false
+          prerelease: ${{ needs.detect-prerelease.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+
+      - name: Update Slack - Release Created
+        continue-on-error: true
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ needs.notify-start.outputs.slack_ts }}
+            text: "Release ${{ github.ref_name }} in progress"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "*iii-cli Release ${{ github.ref_name }}*\n\n:white_check_mark: Release created\n:hourglass_flowing_sand: Building binaries (0/${{ env.TOTAL_TARGETS }} targets x 1 binary)\n:white_square: Validating release..."
+              - type: "context"
+                elements:
+                  - type: "mrkdwn"
+                    text: "Triggered by ${{ github.actor }} | <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}|View Release>"
+
+  build-release:
+    name: Build Release Binaries
+    needs: [create-release]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install cross-compilation tools
+        if: runner.os == 'Linux'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update
+          case "$BUILD_TARGET" in
+            x86_64-unknown-linux-musl)
+              sudo apt-get install -y musl-tools
+              ;;
+            aarch64-unknown-linux-gnu)
+              sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              ;;
+          esac
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          key: ${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Verify Windows cross-compilation tools
+        if: runner.os == 'Windows' && matrix.target != 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add $env:BUILD_TARGET
+          rustup target list --installed | Select-String $env:BUILD_TARGET
+
+      - name: Build and upload iii-cli binary
+        uses: taiki-e/upload-rust-binary-action@f391289bcff6a7f36b6301c0a74199657bbb4561 # v1
+        with:
+          bin: iii-cli
+          target: ${{ matrix.target }}
+          tar: unix
+          zip: windows
+          checksum: sha256
+          manifest-path: Cargo.toml
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-builds-complete:
+    name: Update Build Status
+    needs: [notify-start, build-release]
+    runs-on: ubuntu-latest
+    permissions: {}
+    if: always()
+
+    steps:
+      - name: Check build results
+        id: check_builds
+        env:
+          BUILD_RESULT: ${{ needs.build-release.result }}
+        run: |
+          if [ "$BUILD_RESULT" == "success" ]; then
+            echo "emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
+            echo "count=$TOTAL_TARGETS/$TOTAL_TARGETS" >> "$GITHUB_OUTPUT"
+          else
+            echo "emoji=:warning:" >> "$GITHUB_OUTPUT"
+            echo "count=partial" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Slack - Builds Complete
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ needs.notify-start.outputs.slack_ts }}
+            text: "Release ${{ github.ref_name }} builds complete"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "*iii-cli Release ${{ github.ref_name }}*\n\n:white_check_mark: Release created\n${{ steps.check_builds.outputs.emoji }} Binaries built (${{ steps.check_builds.outputs.count }} targets x 1 binary)\n:hourglass_flowing_sand: Validating release..."
+              - type: "context"
+                elements:
+                  - type: "mrkdwn"
+                    text: "Triggered by ${{ github.actor }} | <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}|View Release>"
+
+  notify-complete:
+    name: Notify Release Complete
+    needs: [notify-start, detect-prerelease, create-release, build-release, notify-builds-complete]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Determine overall status
+        id: status
+        env:
+          CREATE_RESULT: ${{ needs.create-release.result }}
+          BUILD_RESULT: ${{ needs.build-release.result }}
+        run: |
+          if [[ "$CREATE_RESULT" == "success" && \
+                "$BUILD_RESULT" == "success" ]]; then
+            {
+              echo "result=success"
+              echo "emoji=:white_check_mark:"
+              echo "text=completed successfully"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "result=failure"
+              echo "emoji=:x:"
+              echo "text=failed"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Slack notification
+        if: needs.notify-start.outputs.slack_ts != ''
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ needs.notify-start.outputs.slack_ts }}
+            text: "Release ${{ github.ref_name }} ${{ steps.status.outputs.text }}"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "*iii-cli Release ${{ github.ref_name }}* ${{ steps.status.outputs.emoji }}\n\n${{ needs.create-release.result == 'success' && ':white_check_mark:' || ':x:' }} Create release: ${{ needs.create-release.result }}\n${{ needs.build-release.result == 'success' && ':white_check_mark:' || ':x:' }} Build binaries: ${{ needs.build-release.result }}\nPre-release: ${{ needs.detect-prerelease.outputs.is_prerelease }}"
+              - type: "context"
+                elements:
+                  - type: "mrkdwn"
+                    text: "<${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}|View Release> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>"
+
+      - name: Send new notification on failure
+        if: needs.notify-start.outputs.slack_ts == '' && steps.status.outputs.result == 'failure'
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: ":x: *iii-cli Release Failed*\nVersion: `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"

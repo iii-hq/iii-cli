@@ -1,0 +1,144 @@
+name: Rollback Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to rollback (e.g., v1.2.3)'
+        required: true
+        type: string
+      delete_release:
+        description: 'Delete the GitHub release'
+        required: false
+        type: boolean
+        default: false
+      reason:
+        description: 'Reason for rollback'
+        required: false
+        type: string
+        default: 'Manual rollback'
+
+jobs:
+  rollback:
+    name: Rollback Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate version format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc))?$ ]]; then
+            echo "::error::Invalid version format: $VERSION (expected vX.Y.Z or vX.Y.Z-{alpha|beta|rc})"
+            exit 1
+          fi
+
+      - name: Notify rollback start
+        id: slack_start
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: ":rewind: *iii-cli Rollback Started*\nVersion: `${{ inputs.version }}`\nReason: ${{ inputs.reason }}\nDelete release: ${{ inputs.delete_release }}\nTriggered by: ${{ github.actor }}"
+
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Delete release
+        if: inputs.delete_release == true
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete "$VERSION" --repo "$GH_REPO" --yes || true
+          echo "::notice::Deleted release $VERSION"
+
+      - name: Delete tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git push origin ":refs/tags/$VERSION" || true
+          git tag -d "$VERSION" || true
+          echo "::notice::Deleted tag $VERSION"
+
+      - name: Calculate previous version
+        id: prev_version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          BASE=$(echo "$VERSION" | sed 's/^v//' | sed 's/-.*//')
+
+          # Use git-tag-based lookup instead of naive decrement
+          # This handles v0.1.0 correctly (no valid v0.0.0 to roll back to)
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v[0-9]' | head -2 | tail -1)
+          if [[ -z "$PREV_TAG" || "$PREV_TAG" == "v${BASE}" ]]; then
+            echo "::error::No previous release tag found to rollback to"
+            exit 1
+          fi
+          PREV="${PREV_TAG#v}"
+
+          echo "version=$PREV" >> "$GITHUB_OUTPUT"
+          echo "::notice::Rolling back Cargo.toml to version $PREV"
+
+      - name: Update Cargo.toml version
+        env:
+          PREV_VERSION: ${{ steps.prev_version.outputs.version }}
+        run: |
+          CARGO_TOML="Cargo.toml"
+          sed -i '/^\[package\]/,/^\[/s/^version = ".*"/version = "'"${PREV_VERSION}"'"/' "$CARGO_TOML"
+
+      - name: Commit rollback
+        env:
+          PREV_VERSION: ${{ steps.prev_version.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          git config user.name "iii-ci[bot]"
+          git config user.email "iii-ci[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock
+          git commit -m "$(cat <<COMMIT_MSG
+          chore: rollback version to ${PREV_VERSION}
+
+          Rolled back from ${VERSION}
+          Reason: ${REASON}
+          COMMIT_MSG
+          )"
+          git push origin main
+
+      - name: Notify rollback complete
+        if: success()
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ steps.slack_start.outputs.ts }}
+            text: ":white_check_mark: *iii-cli Rollback Complete*\nRolled back: `${{ inputs.version }}` -> `v${{ steps.prev_version.outputs.version }}`\nReason: ${{ inputs.reason }}\nRelease deleted: ${{ inputs.delete_release }}"
+
+      - name: Notify rollback failed
+        if: failure()
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.update
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            ts: ${{ steps.slack_start.outputs.ts }}
+            text: ":x: *iii-cli Rollback Failed*\nVersion: `${{ inputs.version }}`\nReason: ${{ inputs.reason }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"

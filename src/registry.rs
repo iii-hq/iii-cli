@@ -1,0 +1,259 @@
+use crate::error::RegistryError;
+
+/// Specification for a managed binary
+#[derive(Debug, Clone)]
+pub struct BinarySpec {
+    /// Binary name (e.g., "iii-console")
+    pub name: &'static str,
+    /// GitHub repository in "owner/repo" format
+    pub repo: &'static str,
+    /// Whether the release workflow produces .sha256 sidecar files
+    pub has_checksum: bool,
+    /// Supported target triples for this binary
+    pub supported_targets: &'static [&'static str],
+    /// Commands that map to this binary
+    pub commands: &'static [CommandMapping],
+}
+
+/// Maps a CLI command to a binary subcommand
+#[derive(Debug, Clone)]
+pub struct CommandMapping {
+    /// The command name as exposed by iii-cli (e.g., "console", "create")
+    pub cli_command: &'static str,
+    /// The subcommand to pass to the binary, or None for direct passthrough
+    pub binary_subcommand: Option<&'static str>,
+}
+
+/// The compiled-in binary registry
+pub static REGISTRY: &[BinarySpec] = &[
+    BinarySpec {
+        name: "iii-console",
+        repo: "iii-hq/console",
+        has_checksum: true,
+        supported_targets: &[
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+        ],
+        commands: &[CommandMapping {
+            cli_command: "console",
+            binary_subcommand: None,
+        }],
+    },
+    BinarySpec {
+        name: "iii-tools",
+        repo: "iii-hq/cli-tooling",
+        has_checksum: false,
+        supported_targets: &[
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+        ],
+        commands: &[CommandMapping {
+            cli_command: "create",
+            binary_subcommand: Some("create"),
+        }],
+    },
+    BinarySpec {
+        name: "iii-tui",
+        repo: "MotiaDev/iii-tui",
+        has_checksum: false,
+        supported_targets: &[
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+        ],
+        commands: &[CommandMapping {
+            cli_command: "tui",
+            binary_subcommand: None,
+        }],
+    },
+    BinarySpec {
+        name: "motia-cli",
+        repo: "MotiaDev/motia-cli",
+        has_checksum: false,
+        supported_targets: &[
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+            "armv7-unknown-linux-gnueabihf",
+        ],
+        commands: &[CommandMapping {
+            cli_command: "motia",
+            binary_subcommand: None,
+        }],
+    },
+    BinarySpec {
+        name: "iii",
+        repo: "iii-hq/iii",
+        has_checksum: false,
+        supported_targets: &[
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+            "armv7-unknown-linux-gnueabihf",
+        ],
+        commands: &[CommandMapping {
+            cli_command: "start",
+            binary_subcommand: None,
+        }],
+    },
+];
+
+/// Resolve a CLI command name to its BinarySpec and optional binary subcommand.
+pub fn resolve_command(command: &str) -> Result<(&'static BinarySpec, Option<&'static str>), RegistryError> {
+    for spec in REGISTRY {
+        for mapping in spec.commands {
+            if mapping.cli_command == command {
+                return Ok((spec, mapping.binary_subcommand));
+            }
+        }
+    }
+    Err(RegistryError::UnknownCommand {
+        command: command.to_string(),
+    })
+}
+
+/// Resolve a command name to its parent BinarySpec (for update resolution).
+/// e.g., "create" resolves to iii-tools.
+pub fn resolve_binary_for_update(command: &str) -> Result<&'static BinarySpec, RegistryError> {
+    // First try exact binary name match
+    for spec in REGISTRY {
+        if spec.name == command {
+            return Ok(spec);
+        }
+    }
+    // Then try command name match
+    for spec in REGISTRY {
+        for mapping in spec.commands {
+            if mapping.cli_command == command {
+                return Ok(spec);
+            }
+        }
+    }
+    Err(RegistryError::UnknownCommand {
+        command: command.to_string(),
+    })
+}
+
+/// Get all unique BinarySpecs in the registry.
+pub fn all_binaries() -> Vec<&'static BinarySpec> {
+    REGISTRY.iter().collect()
+}
+
+/// List all available CLI command names.
+pub fn available_commands() -> Vec<&'static str> {
+    REGISTRY
+        .iter()
+        .flat_map(|spec| spec.commands.iter().map(|m| m.cli_command))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_console() {
+        let (spec, sub) = resolve_command("console").unwrap();
+        assert_eq!(spec.name, "iii-console");
+        assert_eq!(spec.repo, "iii-hq/console");
+        assert!(sub.is_none());
+    }
+
+    #[test]
+    fn test_resolve_create() {
+        let (spec, sub) = resolve_command("create").unwrap();
+        assert_eq!(spec.name, "iii-tools");
+        assert_eq!(spec.repo, "iii-hq/cli-tooling");
+        assert_eq!(sub, Some("create"));
+    }
+
+    #[test]
+    fn test_resolve_tui() {
+        let (spec, sub) = resolve_command("tui").unwrap();
+        assert_eq!(spec.name, "iii-tui");
+        assert_eq!(spec.repo, "MotiaDev/iii-tui");
+        assert!(sub.is_none());
+    }
+
+    #[test]
+    fn test_resolve_motia() {
+        let (spec, sub) = resolve_command("motia").unwrap();
+        assert_eq!(spec.name, "motia-cli");
+        assert_eq!(spec.repo, "MotiaDev/motia-cli");
+        assert!(sub.is_none());
+    }
+
+    #[test]
+    fn test_motia_no_checksum() {
+        let (spec, _) = resolve_command("motia").unwrap();
+        assert!(!spec.has_checksum);
+    }
+
+    #[test]
+    fn test_resolve_start() {
+        let (spec, sub) = resolve_command("start").unwrap();
+        assert_eq!(spec.name, "iii");
+        assert_eq!(spec.repo, "iii-hq/iii");
+        assert!(sub.is_none());
+    }
+
+    #[test]
+    fn test_start_no_checksum() {
+        let (spec, _) = resolve_command("start").unwrap();
+        assert!(!spec.has_checksum);
+    }
+
+    #[test]
+    fn test_unknown_command() {
+        assert!(resolve_command("foobar").is_err());
+    }
+
+    #[test]
+    fn test_resolve_binary_for_update() {
+        let spec = resolve_binary_for_update("create").unwrap();
+        assert_eq!(spec.name, "iii-tools");
+
+        let spec = resolve_binary_for_update("iii-console").unwrap();
+        assert_eq!(spec.name, "iii-console");
+    }
+
+    #[test]
+    fn test_available_commands() {
+        let cmds = available_commands();
+        assert!(cmds.contains(&"console"));
+        assert!(cmds.contains(&"create"));
+        assert!(cmds.contains(&"tui"));
+        assert!(cmds.contains(&"motia"));
+        assert!(cmds.contains(&"start"));
+    }
+
+    #[test]
+    fn test_console_has_checksum() {
+        let (spec, _) = resolve_command("console").unwrap();
+        assert!(spec.has_checksum);
+    }
+
+    #[test]
+    fn test_tui_no_checksum() {
+        let (spec, _) = resolve_command("tui").unwrap();
+        assert!(!spec.has_checksum);
+    }
+}

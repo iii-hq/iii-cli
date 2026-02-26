@@ -1,0 +1,182 @@
+name: Create Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      prerelease:
+        description: 'Pre-release identifier (none for stable, ignored when bump is custom)'
+        required: false
+        type: choice
+        options:
+          - none
+          - alpha
+          - beta
+          - rc
+      custom_version:
+        description: 'Custom version (required when bump is custom, format: X.Y.Z or X.Y.Z-suffix)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Dry run (no tag push)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  create-tag:
+    name: Bump Version & Create Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Pre-flight checks
+        run: |
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          if [[ "$BRANCH" != "main" ]]; then
+            echo "::error::Must be on main branch (currently on $BRANCH)"
+            exit 1
+          fi
+
+          if [[ ! -f Cargo.toml ]]; then
+            echo "::error::Cargo.toml not found"
+            exit 1
+          fi
+
+      - name: Calculate new version
+        id: version
+        env:
+          BUMP_TYPE: ${{ inputs.bump }}
+          PRERELEASE_ID: ${{ inputs.prerelease }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+        run: |
+          CARGO_TOML="Cargo.toml"
+          CURRENT=$(sed -n '/^\[package\]/,/^\[/{/^version/p}' "$CARGO_TOML" | sed 's/version = "\(.*\)"/\1/')
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          if [[ "$BUMP_TYPE" == "custom" ]]; then
+            if [[ -z "$CUSTOM_VERSION" ]]; then
+              echo "::error::custom_version is required when bump is custom"
+              exit 1
+            fi
+
+            NEW_VERSION="${CUSTOM_VERSION#v}"
+
+            if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+              echo "::error::Invalid version format: $NEW_VERSION (expected X.Y.Z or X.Y.Z-suffix)"
+              exit 1
+            fi
+          else
+            BASE="${CURRENT%%-*}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+
+            case "$BUMP_TYPE" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
+
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+            if [[ "$PRERELEASE_ID" != "none" && -n "$PRERELEASE_ID" ]]; then
+              NEW_VERSION="${NEW_VERSION}-${PRERELEASE_ID}"
+            fi
+          fi
+
+          echo "new=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Version bump: $CURRENT -> $NEW_VERSION"
+
+      - name: Update Cargo.toml version
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new }}
+        run: |
+          CARGO_TOML="Cargo.toml"
+          sed -i '/^\[package\]/,/^\[/s/^version = ".*"/version = "'"${NEW_VERSION}"'"/' "$CARGO_TOML"
+
+      - name: Validate version update
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.new }}
+        run: |
+          CARGO_TOML="Cargo.toml"
+          ACTUAL=$(sed -n '/^\[package\]/,/^\[/{/^version/p}' "$CARGO_TOML" | sed 's/version = "\(.*\)"/\1/')
+
+          if [[ "$ACTUAL" != "$EXPECTED_VERSION" ]]; then
+            echo "::error::Version mismatch: expected $EXPECTED_VERSION, got $ACTUAL"
+            exit 1
+          fi
+          echo "::notice::Cargo.toml version verified: $ACTUAL"
+
+      - name: Check tag does not exist
+        if: inputs.dry_run != true
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists"
+            exit 1
+          fi
+
+      - name: Commit and tag
+        if: inputs.dry_run != true
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "iii-ci[bot]"
+          git config user.email "iii-ci[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag -a "$TAG" -m "Release ${TAG}"
+          git push origin main --follow-tags
+
+      - name: Dry run summary
+        if: inputs.dry_run == true
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          echo "::notice::DRY RUN - would have created tag $TAG"
+          echo "Changes that would be committed:"
+          git diff Cargo.toml
+
+      - name: Notify Slack
+        if: inputs.dry_run != true
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: ":label: *iii-cli Tag Created*\nVersion: `${{ steps.version.outputs.tag }}`\nBump: ${{ inputs.bump }}\nPre-release: ${{ inputs.prerelease }}\nTriggered by: ${{ github.actor }}"

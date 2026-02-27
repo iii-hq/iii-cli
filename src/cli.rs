@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
     name = "iii-cli",
     about = "Unified CLI dispatcher for iii tools",
     version,
-    after_help = "COMMANDS:\n  console    Launch the iii web console\n  create     Create a new iii project from a template\n  motia      Create a new Motia project from a template\n  start      Start the iii process communication engine\n  update     Update iii-cli and managed binaries to their latest versions\n  list       Show installed binaries and their versions\n\nSELF-UPDATE:\n  iii-cli update              Update iii-cli + all managed binaries\n  iii-cli update self         Update only iii-cli\n  iii-cli update iii-cli      Update only iii-cli\n  iii-cli update console      Update only iii-console"
+    after_help = "COMMANDS:\n  console    Launch the iii web console\n  create     Create a new iii project from a template\n  motia      Create a new Motia project from a template\n  start      Start the iii process communication engine\n  update     Update iii-cli and managed binaries to their latest versions\n  list       Show installed binaries and their versions\n\n"
 )]
 pub struct Cli {
     /// Disable background update and advisory checks

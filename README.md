@@ -15,7 +15,7 @@ curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash -s -- -v 0.1.0
 
 Custom directory:
 ```bash
-INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/iii-hq/iii-cli/main/install.sh | bash
+curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | INSTALL_DIR=/usr/local/bin bash
 ```
 
 The script auto-detects your platform, downloads the correct binary, verifies the SHA256 checksum, and adds it to your `PATH`.

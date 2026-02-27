@@ -700,7 +700,7 @@ if [[ -x "$INSTALL_DIR/$BIN_NAME" ]]; then
   printf "${MUTED}Get started:${NC}\n"
   printf "\n"
   printf "  iii-cli console          ${MUTED}# Launch iii-console${NC}\n"
-  printf "  iii-cli create my-app    ${MUTED}# Create new project${NC}\n"
+  printf "  iii-cli create           ${MUTED}# Create new project${NC}\n"
   printf "  iii-cli motia            ${MUTED}# Run motia CLI${NC}\n"
   printf "  iii-cli --help           ${MUTED}# See all commands${NC}\n"
   printf "\n"

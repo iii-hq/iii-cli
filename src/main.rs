@@ -229,6 +229,10 @@ async fn handle_update(target: Option<&str>) -> i32 {
     }
 
     let results = match target {
+        Some("iii-cli" | "self") => {
+            // Self-update only
+            vec![update::self_update(&client, &mut app_state).await]
+        }
         Some(cmd) => {
             // Update specific binary
             let spec = match registry::resolve_binary_for_update(cmd) {
@@ -241,15 +245,30 @@ async fn handle_update(target: Option<&str>) -> i32 {
             vec![update::update_binary(&client, spec, &mut app_state).await]
         }
         None => {
-            // Update all
+            // Update all (includes self-update)
             eprintln!("  Checking all binaries for updates...");
             update::update_all(&client, &mut app_state).await
         }
     };
 
     // Print results
+    let mut self_updated = false;
     for result in &results {
         update::print_update_result(result);
+        if let Ok(update::UpdateResult::Updated { binary, .. }) = result {
+            if binary == "iii-cli" {
+                self_updated = true;
+            }
+        }
+    }
+
+    // Print restart note after self-update
+    if self_updated {
+        eprintln!();
+        eprintln!(
+            "  {} iii-cli has been updated. Restart your shell or run the command again to use the new version.",
+            "note:".cyan(),
+        );
     }
 
     // Save state

@@ -124,13 +124,20 @@ Output example:
 
 ### Update Binaries
 
-Update all installed binaries to their latest versions:
+Update iii-cli and all installed binaries to their latest versions:
 
 ```bash
 iii-cli update
 ```
 
-Update a specific binary:
+Update only iii-cli itself:
+
+```bash
+iii-cli update self
+iii-cli update iii-cli
+```
+
+Update a specific managed binary:
 
 ```bash
 iii-cli update console

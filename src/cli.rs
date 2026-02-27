@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
     name = "iii-cli",
     about = "Unified CLI dispatcher for iii tools",
     version,
-    after_help = "COMMANDS:\n  console    Launch the iii web console\n  create     Create a new iii project from a template\n  motia      Create a new Motia project from a template\n  start      Start the iii process communication engine\n  update     Update managed binaries to their latest versions\n  list       Show installed binaries and their versions"
+    after_help = "COMMANDS:\n  console    Launch the iii web console\n  create     Create a new iii project from a template\n  motia      Create a new Motia project from a template\n  start      Start the iii process communication engine\n  update     Update iii-cli and managed binaries to their latest versions\n  list       Show installed binaries and their versions\n\nSELF-UPDATE:\n  iii-cli update              Update iii-cli + all managed binaries\n  iii-cli update self         Update only iii-cli\n  iii-cli update iii-cli      Update only iii-cli\n  iii-cli update console      Update only iii-console"
 )]
 pub struct Cli {
     /// Disable background update and advisory checks
@@ -62,10 +62,11 @@ pub enum Commands {
         args: Vec<String>,
     },
 
-    /// Update managed binaries to their latest versions
+    /// Update iii-cli and managed binaries to their latest versions
     Update {
-        /// Specific command or binary to update (e.g., "console", "create").
-        /// If omitted, updates all installed binaries.
+        /// Specific command or binary to update (e.g., "console", "self").
+        /// Use "self" or "iii-cli" to update only iii-cli.
+        /// If omitted, updates iii-cli and all installed binaries.
         #[arg(name = "command")]
         target: Option<String>,
     },

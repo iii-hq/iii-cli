@@ -61,22 +61,6 @@ pub static REGISTRY: &[BinarySpec] = &[
         }],
     },
     BinarySpec {
-        name: "iii-tui",
-        repo: "MotiaDev/iii-tui",
-        has_checksum: false,
-        supported_targets: &[
-            "aarch64-apple-darwin",
-            "x86_64-apple-darwin",
-            "x86_64-unknown-linux-gnu",
-            "x86_64-unknown-linux-musl",
-            "aarch64-unknown-linux-gnu",
-        ],
-        commands: &[CommandMapping {
-            cli_command: "tui",
-            binary_subcommand: None,
-        }],
-    },
-    BinarySpec {
         name: "motia-cli",
         repo: "MotiaDev/motia-cli",
         has_checksum: false,
@@ -186,14 +170,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_tui() {
-        let (spec, sub) = resolve_command("tui").unwrap();
-        assert_eq!(spec.name, "iii-tui");
-        assert_eq!(spec.repo, "MotiaDev/iii-tui");
-        assert!(sub.is_none());
-    }
-
-    #[test]
     fn test_resolve_motia() {
         let (spec, sub) = resolve_command("motia").unwrap();
         assert_eq!(spec.name, "motia-cli");
@@ -240,7 +216,6 @@ mod tests {
         let cmds = available_commands();
         assert!(cmds.contains(&"console"));
         assert!(cmds.contains(&"create"));
-        assert!(cmds.contains(&"tui"));
         assert!(cmds.contains(&"motia"));
         assert!(cmds.contains(&"start"));
     }
@@ -251,9 +226,4 @@ mod tests {
         assert!(spec.has_checksum);
     }
 
-    #[test]
-    fn test_tui_no_checksum() {
-        let (spec, _) = resolve_command("tui").unwrap();
-        assert!(!spec.has_checksum);
-    }
 }

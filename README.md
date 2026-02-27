@@ -1,6 +1,6 @@
 # iii-cli
 
-A unified command dispatcher for iii-engine tools. Automatically downloads and manages multiple binaries (iii-console, iii-tools, iii-tui) from GitHub, with built-in update checking and security advisories.
+A unified command dispatcher for iii-engine tools. Automatically downloads and manages multiple binaries (iii-console, iii-tools) from GitHub, with built-in update checking and security advisories.
 
 ## Install
 
@@ -70,7 +70,7 @@ cargo build --release
 - **Security advisories**: Warns about critical updates matching installed versions
 - **Cross-platform**: macOS (Apple Silicon + Intel), Linux (x86_64 musl + ARM64 gnu), Windows (x86_64 + ARM64)
 - **Platform-aware storage**: Uses standard data directories for each OS
-- **POSIX exec on Unix**: Replaces process entirely for full terminal ownership (critical for interactive TUIs)
+- **POSIX exec on Unix**: Replaces process entirely for full terminal ownership (critical for interactive tools)
 
 ## Usage
 
@@ -103,14 +103,6 @@ iii-cli create --template my-template
 iii-cli create my-project --help
 ```
 
-### Launch iii-tui
-
-Launch the iii-engine terminal UI:
-
-```bash
-iii-cli tui [ARGS]
-```
-
 ### List Installed Binaries
 
 Show all managed binaries and their versions:
@@ -126,7 +118,6 @@ Output example:
 
   • iii-console (v0.2.4) — installed 2026-02-25 — command: iii-cli console
   • iii-tools (v1.0.2) — installed 2026-02-20 — command: iii-cli create
-  • iii-tui (v0.1.5) — installed 2026-02-22 — command: iii-cli tui
 
   Storage: /Users/user/Library/Application Support/iii-cli/bin
 ```
@@ -144,7 +135,6 @@ Update a specific binary:
 ```bash
 iii-cli update console
 iii-cli update create
-iii-cli update tui
 ```
 
 ### Disable Update Checks

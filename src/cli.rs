@@ -40,18 +40,6 @@ pub enum Commands {
         args: Vec<String>,
     },
 
-    /// Launch the iii terminal UI
-    #[command(
-        hide = true,
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-    )]
-    Tui {
-        /// Arguments passed through to the binary
-        #[arg(num_args = 0..)]
-        args: Vec<String>,
-    },
-
     /// Create a new Motia project from a template
     #[command(
         trailing_var_arg = true,
@@ -95,10 +83,6 @@ pub fn extract_command_info(cmd: &Commands) -> CommandInfo<'_> {
         },
         Commands::Create { args } => CommandInfo::Dispatch {
             command: "create",
-            args,
-        },
-        Commands::Tui { args } => CommandInfo::Dispatch {
-            command: "tui",
             args,
         },
         Commands::Motia { args } => CommandInfo::Dispatch {

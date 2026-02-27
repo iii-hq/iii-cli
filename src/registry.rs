@@ -24,6 +24,24 @@ pub struct CommandMapping {
     pub binary_subcommand: Option<&'static str>,
 }
 
+/// Specification for iii-cli itself (the dispatcher).
+/// Kept separate from REGISTRY because iii-cli is not a dispatched binary.
+pub static SELF_SPEC: BinarySpec = BinarySpec {
+    name: "iii-cli",
+    repo: "iii-hq/iii-cli",
+    has_checksum: true,
+    supported_targets: &[
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+    ],
+    commands: &[],
+};
+
 /// The compiled-in binary registry
 pub static REGISTRY: &[BinarySpec] = &[
     BinarySpec {
@@ -224,6 +242,39 @@ mod tests {
     fn test_console_has_checksum() {
         let (spec, _) = resolve_command("console").unwrap();
         assert!(spec.has_checksum);
+    }
+
+    #[test]
+    fn test_self_spec_fields() {
+        assert_eq!(SELF_SPEC.name, "iii-cli");
+        assert_eq!(SELF_SPEC.repo, "iii-hq/iii-cli");
+        assert!(SELF_SPEC.has_checksum);
+        assert!(SELF_SPEC.commands.is_empty());
+    }
+
+    #[test]
+    fn test_self_spec_supported_targets() {
+        assert!(SELF_SPEC.supported_targets.contains(&"aarch64-apple-darwin"));
+        assert!(SELF_SPEC.supported_targets.contains(&"x86_64-apple-darwin"));
+        assert!(SELF_SPEC.supported_targets.contains(&"x86_64-unknown-linux-gnu"));
+        assert!(SELF_SPEC.supported_targets.contains(&"x86_64-unknown-linux-musl"));
+        assert!(SELF_SPEC.supported_targets.contains(&"aarch64-unknown-linux-gnu"));
+        assert!(SELF_SPEC.supported_targets.contains(&"x86_64-pc-windows-msvc"));
+        assert!(SELF_SPEC.supported_targets.contains(&"aarch64-pc-windows-msvc"));
+        assert_eq!(SELF_SPEC.supported_targets.len(), 7);
+    }
+
+    #[test]
+    fn test_self_spec_not_in_registry() {
+        for spec in REGISTRY {
+            assert_ne!(spec.name, "iii-cli", "iii-cli should not be in REGISTRY");
+        }
+    }
+
+    #[test]
+    fn test_self_spec_platform_support() {
+        let result = crate::platform::check_platform_support(&SELF_SPEC);
+        assert!(result.is_ok());
     }
 
 }

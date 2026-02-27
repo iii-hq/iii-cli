@@ -194,11 +194,85 @@ pub async fn update_binary(
     })
 }
 
-/// Update all installed binaries.
+/// Update iii-cli itself to the latest version.
+pub async fn self_update(
+    client: &reqwest::Client,
+    state: &mut AppState,
+) -> Result<UpdateResult, UpdateError> {
+    let spec = &registry::SELF_SPEC;
+
+    platform::check_platform_support(spec)?;
+
+    eprintln!("  Checking for updates to {}...", spec.name);
+
+    let release = github::fetch_latest_release(client, spec).await?;
+    let latest_version = github::parse_release_version(&release.tag_name)
+        .map_err(|e| UpdateError::VersionParse(e.to_string()))?;
+
+    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("CARGO_PKG_VERSION is always valid semver");
+
+    if current_version >= latest_version {
+        return Ok(UpdateResult::AlreadyUpToDate {
+            binary: spec.name.to_string(),
+            version: current_version,
+        });
+    }
+
+    let asset_name = platform::asset_name(spec.name);
+    let asset = github::find_asset(&release, &asset_name).ok_or_else(|| {
+        UpdateError::Github(IiiGithubError::Network(
+            crate::error::NetworkError::AssetNotFound {
+                binary: spec.name.to_string(),
+                platform: platform::current_target().to_string(),
+            },
+        ))
+    })?;
+
+    let checksum_url = if spec.has_checksum {
+        let checksum_name = platform::checksum_asset_name(spec.name);
+        github::find_asset(&release, &checksum_name)
+            .map(|a| a.browser_download_url.clone())
+    } else {
+        None
+    };
+
+    eprintln!(
+        "  Updating {} to v{}...",
+        spec.name,
+        latest_version
+    );
+
+    // Install to the standard managed location (~/.local/bin/iii-cli),
+    // consistent with install.sh and other managed binaries.
+    let target_path = platform::binary_path(spec.name);
+
+    download::download_and_install(
+        client,
+        spec,
+        asset,
+        checksum_url.as_deref(),
+        &target_path,
+    )
+    .await?;
+
+    state.record_install(spec.name, latest_version.clone(), asset_name);
+
+    Ok(UpdateResult::Updated {
+        binary: spec.name.to_string(),
+        from: Some(current_version),
+        to: latest_version,
+    })
+}
+
+/// Update all installed binaries (including iii-cli itself).
 pub async fn update_all(
     client: &reqwest::Client,
     state: &mut AppState,
 ) -> Vec<Result<UpdateResult, UpdateError>> {
+    // Self-update first
+    let mut results = vec![self_update(client, state).await];
+
     let specs: Vec<&BinarySpec> = registry::all_binaries()
         .into_iter()
         .filter(|spec| {
@@ -208,7 +282,6 @@ pub async fn update_all(
         })
         .collect();
 
-    let mut results = Vec::new();
     for spec in specs {
         results.push(update_binary(client, spec, state).await);
     }

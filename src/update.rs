@@ -119,6 +119,12 @@ pub async fn run_background_check(
     }
 }
 
+/// Check if a managed binary is installed on disk.
+fn is_binary_installed(name: &str) -> bool {
+    platform::binary_path(name).exists()
+        || platform::find_existing_binary(name).is_some()
+}
+
 /// Update a specific binary to the latest version.
 pub async fn update_binary(
     client: &reqwest::Client,
@@ -128,6 +134,8 @@ pub async fn update_binary(
     // Check platform support
     platform::check_platform_support(spec)?;
 
+    let binary_installed = is_binary_installed(spec.name);
+
     eprintln!("  Checking for updates to {}...", spec.name);
 
     // Fetch latest release
@@ -135,13 +143,15 @@ pub async fn update_binary(
     let latest_version = github::parse_release_version(&release.tag_name)
         .map_err(|e| UpdateError::VersionParse(e.to_string()))?;
 
-    // Check if already up to date
-    if let Some(installed) = state.installed_version(spec.name) {
-        if *installed >= latest_version {
-            return Ok(UpdateResult::AlreadyUpToDate {
-                binary: spec.name.to_string(),
-                version: installed.clone(),
-            });
+    // Check if already up to date (only if the binary file actually exists on disk)
+    if binary_installed {
+        if let Some(installed) = state.installed_version(spec.name) {
+            if *installed >= latest_version {
+                return Ok(UpdateResult::AlreadyUpToDate {
+                    binary: spec.name.to_string(),
+                    version: installed.clone(),
+                });
+            }
         }
     }
 
@@ -165,11 +175,28 @@ pub async fn update_binary(
         None
     };
 
-    eprintln!(
-        "  Updating {} to v{}...",
-        spec.name,
-        latest_version
-    );
+    // Capture previous version before record_install overwrites it.
+    // Only consider state if the binary actually exists on disk —
+    // stale state entries for missing binaries should show as fresh installs.
+    let previous_version = if binary_installed {
+        state.installed_version(spec.name).cloned()
+    } else {
+        None
+    };
+
+    if binary_installed {
+        eprintln!(
+            "  Updating {} to v{}...",
+            spec.name,
+            latest_version
+        );
+    } else {
+        eprintln!(
+            "  Installing {} v{}...",
+            spec.name,
+            latest_version
+        );
+    }
 
     // Download and install
     let target_path = platform::binary_path(spec.name);
@@ -187,9 +214,7 @@ pub async fn update_binary(
 
     Ok(UpdateResult::Updated {
         binary: spec.name.to_string(),
-        from: state
-            .installed_version(spec.name)
-            .cloned(),
+        from: previous_version,
         to: latest_version,
     })
 }
@@ -209,8 +234,17 @@ pub async fn self_update(
     let latest_version = github::parse_release_version(&release.tag_name)
         .map_err(|e| UpdateError::VersionParse(e.to_string()))?;
 
-    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .expect("CARGO_PKG_VERSION is always valid semver");
+    // Use the installed binary version from state if available,
+    // falling back to the compile-time version of the running binary.
+    // This prevents re-downloading when the managed binary is already up-to-date
+    // but the running binary is a dev build with an older compile-time version.
+    let current_version = state
+        .installed_version(spec.name)
+        .cloned()
+        .unwrap_or_else(|| {
+            Version::parse(env!("CARGO_PKG_VERSION"))
+                .expect("CARGO_PKG_VERSION is always valid semver")
+        });
 
     if current_version >= latest_version {
         return Ok(UpdateResult::AlreadyUpToDate {
@@ -273,16 +307,7 @@ pub async fn update_all(
     // Self-update first
     let mut results = vec![self_update(client, state).await];
 
-    let specs: Vec<&BinarySpec> = registry::all_binaries()
-        .into_iter()
-        .filter(|spec| {
-            // Only update binaries that are installed or whose platform is supported
-            state.binaries.contains_key(spec.name)
-                || platform::check_platform_support(spec).is_ok()
-        })
-        .collect();
-
-    for spec in specs {
+    for spec in registry::all_binaries() {
         results.push(update_binary(client, spec, state).await);
     }
     results

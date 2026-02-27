@@ -102,7 +102,7 @@ EXAMPLES:
     curl -fsSL https://raw.githubusercontent.com/iii-hq/iii-cli/main/install.sh | bash -s -- -v 0.1.3
 
     # Install to custom directory
-    INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/iii-hq/iii-cli/main/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/iii-hq/iii-cli/main/install.sh | INSTALL_DIR=/usr/local/bin bash
 
     # Install from local binary
     ./install.sh -b ./target/release/iii-cli

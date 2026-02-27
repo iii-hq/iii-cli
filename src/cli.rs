@@ -22,6 +22,7 @@ pub enum Commands {
     #[command(
         trailing_var_arg = true,
         allow_hyphen_values = true,
+        disable_help_flag = true,
     )]
     Console {
         /// Arguments passed through to the binary
@@ -33,6 +34,7 @@ pub enum Commands {
     #[command(
         trailing_var_arg = true,
         allow_hyphen_values = true,
+        disable_help_flag = true,
     )]
     Create {
         /// Arguments passed through to the binary
@@ -44,6 +46,7 @@ pub enum Commands {
     #[command(
         trailing_var_arg = true,
         allow_hyphen_values = true,
+        disable_help_flag = true,
     )]
     Motia {
         /// Arguments passed through to the binary
@@ -55,6 +58,7 @@ pub enum Commands {
     #[command(
         trailing_var_arg = true,
         allow_hyphen_values = true,
+        disable_help_flag = true,
     )]
     Start {
         /// Arguments passed through to the binary

@@ -10,7 +10,7 @@ curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash
 
 Specific version:
 ```bash
-curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash -s -- -v 0.1.0
+curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash -s -- -v VERSION_NUMBER
 ```
 
 Custom directory:

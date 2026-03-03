@@ -5,7 +5,6 @@ use clap::{Parser, Subcommand};
     name = "iii-cli",
     about = "Unified CLI dispatcher for iii tools",
     version,
-    after_help = "COMMANDS:\n  console    Launch the iii web console\n  create     Create a new iii project from a template\n  motia      Create a new Motia project from a template\n  start      Start the iii process communication engine\n  update     Update iii-cli and managed binaries to their latest versions\n  list       Show installed binaries and their versions\n\n"
 )]
 pub struct Cli {
     /// Disable background update and advisory checks
@@ -42,17 +41,9 @@ pub enum Commands {
         args: Vec<String>,
     },
 
-    /// Create a new Motia project from a template
-    #[command(
-        trailing_var_arg = true,
-        allow_hyphen_values = true,
-        disable_help_flag = true,
-    )]
-    Motia {
-        /// Arguments passed through to the binary
-        #[arg(num_args = 0..)]
-        args: Vec<String>,
-    },
+    /// Manage SDKs powered by Motia
+    #[command(subcommand)]
+    Sdk(SdkCommands),
 
     /// Start the iii process communication engine
     #[command(
@@ -79,6 +70,22 @@ pub enum Commands {
     List,
 }
 
+/// SDK subcommands
+#[derive(Subcommand)]
+pub enum SdkCommands {
+    /// Motia SDK tools
+    #[command(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        disable_help_flag = true,
+    )]
+    Motia {
+        /// Arguments passed through to the binary
+        #[arg(num_args = 0..)]
+        args: Vec<String>,
+    },
+}
+
 /// Extract the command name and passthrough args from a parsed Commands value.
 pub fn extract_command_info(cmd: &Commands) -> CommandInfo<'_> {
     match cmd {
@@ -90,9 +97,11 @@ pub fn extract_command_info(cmd: &Commands) -> CommandInfo<'_> {
             command: "create",
             args,
         },
-        Commands::Motia { args } => CommandInfo::Dispatch {
-            command: "motia",
-            args,
+        Commands::Sdk(sdk_cmd) => match sdk_cmd {
+            SdkCommands::Motia { args } => CommandInfo::Dispatch {
+                command: "motia",
+                args,
+            },
         },
         Commands::Start { args } => CommandInfo::Dispatch {
             command: "start",

@@ -234,8 +234,13 @@ async fn handle_update(target: Option<&str>) -> i32 {
             vec![update::self_update(&client, &mut app_state).await]
         }
         Some(cmd) => {
+            // Normalize SDK-namespaced commands to registry keys
+            let registry_key = match cmd {
+                "sdk" => "motia-cli",
+                other => other,
+            };
             // Update specific binary
-            let spec = match registry::resolve_binary_for_update(cmd) {
+            let spec = match registry::resolve_binary_for_update(registry_key) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("{} {}", "error:".red(), e);
@@ -309,7 +314,13 @@ fn handle_list() -> i32 {
             .iter()
             .find(|s| s.name == name)
             .and_then(|s| s.commands.first())
-            .map(|c| c.cli_command)
+            .map(|c| {
+                if c.cli_command == "motia" {
+                    "sdk motia"
+                } else {
+                    c.cli_command
+                }
+            })
             .unwrap_or("?");
 
         eprintln!(

@@ -65,7 +65,7 @@ pub static REGISTRY: &[BinarySpec] = &[
     BinarySpec {
         name: "iii-tools",
         repo: "iii-hq/cli-tooling",
-        has_checksum: false,
+        has_checksum: true,
         supported_targets: &[
             "aarch64-apple-darwin",
             "x86_64-apple-darwin",
@@ -159,11 +159,17 @@ pub fn all_binaries() -> Vec<&'static BinarySpec> {
     REGISTRY.iter().collect()
 }
 
-/// List all available CLI command names.
+/// List all available CLI command names (using user-facing paths).
 pub fn available_commands() -> Vec<&'static str> {
     REGISTRY
         .iter()
-        .flat_map(|spec| spec.commands.iter().map(|m| m.cli_command))
+        .flat_map(|spec| spec.commands.iter().map(|m| {
+            if m.cli_command == "motia" {
+                "sdk motia"
+            } else {
+                m.cli_command
+            }
+        }))
         .collect()
 }
 
@@ -234,14 +240,33 @@ mod tests {
         let cmds = available_commands();
         assert!(cmds.contains(&"console"));
         assert!(cmds.contains(&"create"));
-        assert!(cmds.contains(&"motia"));
+        assert!(cmds.contains(&"sdk motia"));
         assert!(cmds.contains(&"start"));
+        assert!(!cmds.contains(&"motia"), "motia should be namespaced as 'sdk motia'");
+    }
+
+    #[test]
+    fn test_resolve_binary_for_update_motia() {
+        let spec = resolve_binary_for_update("motia").unwrap();
+        assert_eq!(spec.name, "motia-cli");
+    }
+
+    #[test]
+    fn test_resolve_binary_for_update_sdk_not_in_registry() {
+        // "sdk" is not a valid registry key; the update command must translate it
+        assert!(resolve_binary_for_update("sdk").is_err());
     }
 
     #[test]
     fn test_console_has_checksum() {
         let (spec, _) = resolve_command("console").unwrap();
         assert!(spec.has_checksum);
+    }
+
+    #[test]
+    fn test_iii_tools_has_checksum() {
+        let (spec, _) = resolve_command("create").unwrap();
+        assert!(spec.has_checksum, "iii-tools should have checksums enabled");
     }
 
     #[test]
